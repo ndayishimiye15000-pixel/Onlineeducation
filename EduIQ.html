@@ -1,0 +1,1418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>EduIQ — Online Automated School System</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:#f0f4ff;color:#1e293b;
+  background-image:radial-gradient(ellipse 80% 50% at 50% -10%,rgba(99,102,241,.07) 0%,transparent 60%);
+  background-attachment:fixed;}
+input,select,textarea{background:#fff!important;border:1px solid #cbd5e1!important;color:#1e293b!important;
+  border-radius:8px;padding:9px 12px;width:100%;font-size:13px;font-family:inherit;outline:none;
+  transition:border-color .2s,box-shadow .2s;}
+input:focus,select:focus,textarea:focus{border-color:#6366f1!important;box-shadow:0 0 0 3px rgba(99,102,241,.12)!important;}
+input::placeholder,textarea::placeholder{color:#94a3b8;}
+select option{background:#fff;color:#1e293b;}
+::-webkit-scrollbar{width:5px;}::-webkit-scrollbar-track{background:#f0f4ff;}::-webkit-scrollbar-thumb{background:#c7d2fe;border-radius:3px;}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);}}
+@keyframes spin{to{transform:rotate(360deg);}}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:.6;}}
+.spin{animation:spin .9s linear infinite;display:inline-block;}
+.fade-in{animation:fadeIn .35s ease both;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useCallback,useMemo}=React;
+const uid=()=>Math.random().toString(36).slice(2,10);
+const toDay=()=>new Date().toISOString().slice(0,10);
+const now=()=>new Date().toISOString();
+
+/* ═══════════════════════════════════════════════
+   JSONBIN STORAGE  — same pattern as FarmIQ
+═══════════════════════════════════════════════ */
+// ⚠️ Replace these with your own JSONBin IDs & key
+const JBIN_KEY  = "$2a$10$LDktMj7oTNhMBjIidsIPoelQmzqlhnMXDvMyMHbIe9yYope1CnBLO";
+const JBIN_USERS_ID = "69c3ac3faa77b81da9196648";
+const JBIN_DATA_ID  = "69c3acc6b7ec241ddc9f8619";
+const JBIN_USERS_URL= "https://api.jsonbin.io/v3/b/"+JBIN_USERS_ID;
+const JBIN_DATA_URL = "https://api.jsonbin.io/v3/b/"+JBIN_DATA_ID;
+
+let _saveQueue=Promise.resolve();
+let _latestData=null;
+
+async function getOnlineUsers(){
+  try{
+    const r=await fetch(JBIN_USERS_URL+"/latest",{headers:{"X-Master-Key":JBIN_KEY,"X-Bin-Meta":"false"}});
+    if(!r.ok)throw new Error(r.status);
+    const d=await r.json();
+    return d&&d.list?d.list:null;
+  }catch(e){console.error("getUsers",e);return null;}
+}
+async function setOnlineUsers(users){
+  try{
+    const r=await fetch(JBIN_USERS_URL,{method:"PUT",
+      headers:{"Content-Type":"application/json","X-Master-Key":JBIN_KEY},
+      body:JSON.stringify({list:users,updatedAt:now()})});
+    if(!r.ok)throw new Error(r.status);
+  }catch(e){console.error("setUsers",e);throw e;}
+}
+async function getOnlineData(){
+  try{
+    const r=await fetch(JBIN_DATA_URL+"/latest",{headers:{"X-Master-Key":JBIN_KEY,"X-Bin-Meta":"false"}});
+    if(!r.ok)return null;
+    const d=await r.json();
+    if(d)_latestData={...d};
+    return d||null;
+  }catch(e){console.error("getData",e);return null;}
+}
+function setOnlineData(patch){
+  _latestData={...(_latestData||{}),...patch,updatedAt:now()};
+  _saveQueue=_saveQueue.then(async()=>{
+    try{
+      const r=await fetch(JBIN_DATA_URL,{method:"PUT",
+        headers:{"Content-Type":"application/json","X-Master-Key":JBIN_KEY},
+        body:JSON.stringify(_latestData)});
+      if(!r.ok)console.error("setData failed",r.status);
+    }catch(e){console.error("setData",e);}
+  });
+  return _saveQueue;
+}
+function dsSet(key,val){return setOnlineData({[key]:val});}
+
+/* ═══════════════════════════════════════════════
+   COLOUR + STYLE TOKENS
+═══════════════════════════════════════════════ */
+const C={
+  accent:"#6366f1", accentDark:"#4f46e5", accentLight:"rgba(99,102,241,.12)",
+  green:"#10b981",  greenBg:"rgba(16,185,129,.1)",
+  red:"#ef4444",    redBg:"rgba(239,68,68,.1)",
+  amber:"#f59e0b",  amberBg:"rgba(245,158,11,.08)",
+  blue:"#3b82f6",   blueBg:"rgba(59,130,246,.1)",
+  text:"#1e293b",   muted:"#64748b", faint:"#94a3b8",
+  bg:"#f0f4ff",     card:"#ffffff",  elevated:"#f8faff",
+  border:"#e2e8f0", borderAccent:"rgba(99,102,241,.25)",
+};
+const S={
+  card:{background:C.card,borderRadius:14,padding:"16px",border:"1px solid "+C.border,
+    boxShadow:"0 1px 3px rgba(0,0,0,.06)",marginBottom:14},
+  h1:{fontSize:17,fontWeight:800,color:C.text,marginBottom:2},
+  sub:{fontSize:12,color:C.muted,marginBottom:14},
+  btn:(bg=C.accent,fg="#fff")=>({background:bg,color:fg,border:"none",borderRadius:8,
+    padding:"9px 16px",fontSize:13,fontWeight:600,cursor:"pointer",fontFamily:"inherit",
+    transition:"opacity .15s"}),
+  inp:{background:"#fff",border:"1px solid "+C.border,color:C.text,borderRadius:8,
+    padding:"9px 12px",width:"100%",fontSize:13,fontFamily:"inherit",outline:"none"},
+  tab:(active)=>({flex:1,padding:"7px 4px",borderRadius:7,border:"none",
+    background:active?C.accent:"transparent",color:active?"#fff":C.muted,
+    fontSize:11,fontWeight:active?700:500,cursor:"pointer",fontFamily:"inherit",
+    transition:"all .15s",whiteSpace:"nowrap"}),
+  badge:(color,bg)=>({display:"inline-block",padding:"2px 9px",borderRadius:20,fontSize:10,
+    fontWeight:700,color:color,background:bg}),
+  g2:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12},
+  g3:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:12},
+  stat:{background:C.elevated,borderRadius:10,padding:"12px",border:"1px solid "+C.border},
+  sl:{fontSize:10,color:C.faint,textTransform:"uppercase",letterSpacing:".6px",marginBottom:4},
+  sv:{fontSize:20,fontWeight:800,color:C.text},
+  loader:{width:16,height:16,border:"2px solid "+C.accentLight,borderTopColor:C.accent,borderRadius:"50%"},
+};
+
+/* ═══════════════════════════════════════════════
+   SEED DATA
+═══════════════════════════════════════════════ */
+const INIT_USERS=[
+  {id:"u1",name:"System Admin",username:"admin",password:"admin123",role:"admin",approved:true,createdAt:toDay()},
+  {id:"u2",name:"Mrs. Uwimana",username:"teacher1",password:"teach123",role:"teacher",approved:true,subject:"Mathematics",createdAt:toDay()},
+  {id:"u3",name:"Jean Pierre",username:"student1",password:"pass123",role:"student",approved:true,class:"S3",regNo:"2024/001",createdAt:toDay()},
+];
+const INIT_DATA={
+  students:[
+    {id:"s1",name:"Jean Pierre",username:"student1",class:"S3",regNo:"2024/001",approved:true},
+    {id:"s2",name:"Amina Uwase",username:"student2",class:"S3",regNo:"2024/002",approved:true},
+    {id:"s3",name:"Eric Mugisha",username:"student3",class:"S4",regNo:"2024/003",approved:true},
+  ],
+  teachers:[
+    {id:"t1",name:"Mrs. Uwimana",username:"teacher1",subject:"Mathematics"},
+    {id:"t2",name:"Mr. Habimana",username:"teacher2",subject:"Physics"},
+  ],
+  resources:[],
+  exams:[],
+  submissions:[],
+  announcements:[],
+};
+
+/* ═══════════════════════════════════════════════
+   HELPERS
+═══════════════════════════════════════════════ */
+function getGrade(pct){
+  if(pct>=80)return{g:"A",l:"Distinction",c:C.green};
+  if(pct>=70)return{g:"B",l:"Merit",c:C.blue};
+  if(pct>=60)return{g:"C",l:"Credit",c:C.accent};
+  if(pct>=50)return{g:"D",l:"Pass",c:C.amber};
+  return{g:"F",l:"Fail",c:C.red};
+}
+function calcScore(answers,questions){
+  let earned=0,total=0;
+  (questions||[]).forEach(q=>{
+    total+=q.marks||1;
+    const a=answers[q.id];
+    if(!a)return;
+    if(q.type==="mcq"||q.type==="fill"){
+      if((a||"").trim().toLowerCase()===(q.answer||"").trim().toLowerCase())earned+=q.marks||1;
+    }else if(q.type==="match"){
+      let pts=0;
+      (q.pairs||[]).forEach(p=>{
+        if((a[p.id]||"").trim().toLowerCase()===(p.right||"").trim().toLowerCase())pts+=1;
+      });
+      earned+=Math.round(((pts/(q.pairs?.length||1))*(q.marks||1)));
+    }else{
+      // short answer — partial credit by keyword matching
+      const kw=(q.answer||"").toLowerCase().split(/[,\s]+/).filter(Boolean);
+      const resp=(a||"").toLowerCase();
+      const matched=kw.filter(k=>resp.includes(k)).length;
+      const pct=kw.length>0?matched/kw.length:0;
+      earned+=Math.round(pct*(q.marks||1));
+    }
+  });
+  return{earned,total,pct:total>0?Math.round((earned/total)*100):0};
+}
+function Spinner(){return<span className="spin" style={S.loader}/>;}
+
+/* ═══════════════════════════════════════════════
+   TOAST
+═══════════════════════════════════════════════ */
+function Toast({msg,type,onDone}){
+  useEffect(()=>{const t=setTimeout(onDone,2800);return()=>clearTimeout(t);},[]);
+  const bg=type==="ok"?C.green:type==="err"?C.red:C.accent;
+  return<div className="fade-in" style={{position:"fixed",top:16,right:16,zIndex:9999,
+    background:bg,color:"#fff",padding:"10px 18px",borderRadius:10,fontSize:13,fontWeight:600,
+    boxShadow:"0 4px 20px rgba(0,0,0,.18)",maxWidth:300}}>{msg}</div>;
+}
+function useToast(){
+  const[t,setT]=useState(null);
+  const show=(msg,type="ok")=>setT({msg,type,k:uid()});
+  const el=t&&<Toast key={t.k} msg={t.msg} type={t.type} onDone={()=>setT(null)}/>;
+  return[show,el];
+}
+
+/* ═══════════════════════════════════════════════
+   LOGIN PAGE
+═══════════════════════════════════════════════ */
+function LoginPage({onLogin,users}){
+  const[form,setForm]=useState({username:"",password:""});
+  const[err,setErr]=useState("");
+  const[loading,setLoading]=useState(false);
+  const[reg,setReg]=useState(false);
+  const[regForm,setRegForm]=useState({name:"",username:"",password:"",role:"student",class:"",subject:""});
+
+  function doLogin(){
+    setLoading(true);setErr("");
+    setTimeout(()=>{
+      const u=users.find(x=>x.username===form.username&&x.password===form.password);
+      if(!u){setErr("Invalid username or password.");setLoading(false);return;}
+      if(!u.approved){setErr("Your account is pending approval.");setLoading(false);return;}
+      onLogin(u);setLoading(false);
+    },600);
+  }
+
+  async function doRegister(){
+    if(!regForm.name||!regForm.username||!regForm.password){setErr("Fill all fields.");return;}
+    if(users.find(u=>u.username===regForm.username)){setErr("Username already taken.");return;}
+    const newUser={id:uid(),name:regForm.name,username:regForm.username,password:regForm.password,
+      role:regForm.role,approved:false,
+      ...(regForm.role==="student"?{class:regForm.class,regNo:"REG/"+uid().slice(0,6).toUpperCase()}:{}),
+      ...(regForm.role==="teacher"?{subject:regForm.subject}:{}),
+      createdAt:toDay()};
+    const updated=[...(users||[]),newUser];
+    await setOnlineUsers(updated);
+    setErr("Registration submitted! Wait for admin approval.");
+    setReg(false);
+  }
+
+  return(
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+      <div style={{width:"100%",maxWidth:380}}>
+        {/* Logo */}
+        <div style={{textAlign:"center",marginBottom:28}}>
+          <div style={{fontSize:42,marginBottom:8}}>🎓</div>
+          <div style={{fontSize:28,fontWeight:900,color:C.accent,letterSpacing:-1}}>EduIQ</div>
+          <div style={{fontSize:12,color:C.muted,letterSpacing:2,textTransform:"uppercase"}}>Online School System</div>
+        </div>
+
+        <div style={{...S.card,padding:24}}>
+          {!reg?(
+            <>
+              <div style={{fontWeight:700,fontSize:15,marginBottom:16,color:C.text}}>Sign In</div>
+              <div style={{marginBottom:12}}>
+                <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Username</div>
+                <input value={form.username} onChange={e=>setForm({...form,username:e.target.value})}
+                  placeholder="Enter username" onKeyDown={e=>e.key==="Enter"&&doLogin()}/>
+              </div>
+              <div style={{marginBottom:16}}>
+                <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Password</div>
+                <input type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})}
+                  placeholder="Enter password" onKeyDown={e=>e.key==="Enter"&&doLogin()}/>
+              </div>
+              {err&&<div style={{color:C.red,fontSize:12,marginBottom:12,padding:"8px 12px",background:C.redBg,borderRadius:7}}>{err}</div>}
+              <button style={{...S.btn(),width:"100%",padding:"11px"}} onClick={doLogin} disabled={loading}>
+                {loading?<><Spinner/> Signing in…</>:"Sign In →"}
+              </button>
+              <div style={{textAlign:"center",marginTop:14,fontSize:12,color:C.muted}}>
+                No account?{" "}
+                <button onClick={()=>{setReg(true);setErr("");}} style={{background:"none",border:"none",color:C.accent,cursor:"pointer",fontWeight:700,fontFamily:"inherit",fontSize:12}}>Register</button>
+              </div>
+              {/* Demo hints */}
+              <div style={{marginTop:16,padding:"10px 12px",background:C.elevated,borderRadius:8,border:"1px solid "+C.border}}>
+                <div style={{fontSize:10,fontWeight:700,color:C.muted,marginBottom:6}}>DEMO ACCOUNTS</div>
+                {[["admin","admin123","Admin"],["teacher1","teach123","Teacher"],["student1","pass123","Student"]].map(([u,p,r])=>(
+                  <div key={u} style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:3}}>
+                    <span style={{color:C.text,fontWeight:600}}>{r}</span>
+                    <span style={{color:C.muted}}>{u} / {p}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          ):(
+            <>
+              <div style={{fontWeight:700,fontSize:15,marginBottom:16,color:C.text}}>Create Account</div>
+              {[["Full Name","name","text"],["Username","username","text"],["Password","password","password"]].map(([l,k,t])=>(
+                <div key={k} style={{marginBottom:10}}>
+                  <div style={{fontSize:11,color:C.muted,marginBottom:4}}>{l}</div>
+                  <input type={t} value={regForm[k]} onChange={e=>setRegForm({...regForm,[k]:e.target.value})} placeholder={l}/>
+                </div>
+              ))}
+              <div style={{marginBottom:10}}>
+                <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Role</div>
+                <select value={regForm.role} onChange={e=>setRegForm({...regForm,role:e.target.value})}>
+                  <option value="student">Student</option>
+                  <option value="teacher">Teacher</option>
+                </select>
+              </div>
+              {regForm.role==="student"&&(
+                <div style={{marginBottom:10}}>
+                  <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Class</div>
+                  <select value={regForm.class} onChange={e=>setRegForm({...regForm,class:e.target.value})}>
+                    <option value="">Select class…</option>
+                    {["S1","S2","S3","S4","S5","S6"].map(c=><option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+              )}
+              {regForm.role==="teacher"&&(
+                <div style={{marginBottom:10}}>
+                  <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Subject</div>
+                  <input value={regForm.subject} onChange={e=>setRegForm({...regForm,subject:e.target.value})} placeholder="e.g. Mathematics"/>
+                </div>
+              )}
+              {err&&<div style={{color:err.includes("submitted")?C.green:C.red,fontSize:12,marginBottom:12,padding:"8px 12px",background:err.includes("submitted")?C.greenBg:C.redBg,borderRadius:7}}>{err}</div>}
+              <button style={{...S.btn(),width:"100%",padding:"11px",marginBottom:10}} onClick={doRegister}>Submit Registration</button>
+              <button onClick={()=>{setReg(false);setErr("");}} style={{...S.btn(C.elevated,C.muted),width:"100%",border:"1px solid "+C.border}}>← Back to Login</button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════
+   ADMIN DASHBOARD
+═══════════════════════════════════════════════ */
+function AdminDash({user,data,setData,users,setUsers,toast,onLogout}){
+  const[tab,setTab]=useState("overview");
+  const students=users.filter(u=>u.role==="student");
+  const teachers=users.filter(u=>u.role==="teacher");
+  const pending=users.filter(u=>!u.approved);
+
+  async function approve(uid){
+    const updated=users.map(u=>u.id===uid?{...u,approved:true}:u);
+    setUsers(updated);await setOnlineUsers(updated);toast("User approved ✓");
+  }
+  async function removeUser(uid){
+    if(!confirm("Remove this user?"))return;
+    const updated=users.filter(u=>u.id!==uid);
+    setUsers(updated);await setOnlineUsers(updated);toast("User removed");
+  }
+  async function postAnnouncement(text,target){
+    if(!text.trim())return;
+    const ann={id:uid(),text,target,author:user.name,date:toDay(),createdAt:now()};
+    const updated=[...(data.announcements||[]),ann];
+    setData(d=>({...d,announcements:updated}));
+    dsSet("announcements",updated);
+    toast("Announcement posted ✓");
+  }
+
+  const tabs=[["overview","📊 Overview"],["users","👥 Users"],["pending","🕐 Pending"+(pending.length>0?` (${pending.length})`:"")],["announce","📢 Announce"],["results","📈 Results"]];
+
+  return(
+    <div>
+      <div style={S.h1}>⚙️ Admin Panel</div>
+      <div style={S.sub}>System overview · User management · Announcements</div>
+
+      {/* Tabs */}
+      <div style={{display:"flex",background:C.elevated,borderRadius:9,padding:3,marginBottom:16,gap:2,border:"1px solid "+C.border,flexWrap:"wrap"}}>
+        {tabs.map(([t,l])=><button key={t} style={S.tab(tab===t)} onClick={()=>setTab(t)}>{l}</button>)}
+      </div>
+
+      {/* OVERVIEW */}
+      {tab==="overview"&&(
+        <div>
+          <div style={S.g3}>
+            {[{l:"Students",v:students.length,c:C.accent},{l:"Teachers",v:teachers.length,c:C.green},{l:"Pending",v:pending.length,c:C.amber}].map(s=>(
+              <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c}}>{s.v}</div></div>
+            ))}
+          </div>
+          <div style={S.g3}>
+            {[{l:"Exams",v:(data.exams||[]).length,c:C.blue},{l:"Resources",v:(data.resources||[]).length,c:C.accent},{l:"Submissions",v:(data.submissions||[]).length,c:C.green}].map(s=>(
+              <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c}}>{s.v}</div></div>
+            ))}
+          </div>
+          <div style={{...S.card}}>
+            <div style={{fontWeight:700,marginBottom:10}}>Recent Announcements</div>
+            {(data.announcements||[]).length===0&&<div style={{color:C.faint,fontSize:13}}>No announcements yet.</div>}
+            {(data.announcements||[]).slice(-3).reverse().map(a=>(
+              <div key={a.id} style={{padding:"8px 0",borderBottom:"1px solid "+C.border,fontSize:13}}>
+                <div style={{fontWeight:600,color:C.text}}>{a.text}</div>
+                <div style={{fontSize:11,color:C.muted}}>→ {a.target} · {a.author} · {a.date}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* USERS */}
+      {tab==="users"&&(
+        <div>
+          {["teacher","student"].map(role=>(
+            <div key={role} style={S.card}>
+              <div style={{fontWeight:700,marginBottom:10,textTransform:"capitalize"}}>{role}s ({users.filter(u=>u.role===role).length})</div>
+              {users.filter(u=>u.role===role&&u.approved).map(u=>(
+                <div key={u.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:"1px solid "+C.border}}>
+                  <div>
+                    <div style={{fontWeight:600,fontSize:13}}>{u.name}</div>
+                    <div style={{fontSize:11,color:C.muted}}>@{u.username} {u.class?"· "+u.class:""} {u.subject?"· "+u.subject:""}</div>
+                  </div>
+                  <button style={{...S.btn(C.redBg,C.red),fontSize:11,padding:"4px 10px",border:"1px solid "+C.red+"44"}} onClick={()=>removeUser(u.id)}>Remove</button>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* PENDING */}
+      {tab==="pending"&&(
+        <div style={S.card}>
+          <div style={{fontWeight:700,marginBottom:10}}>Pending Approvals</div>
+          {pending.length===0&&<div style={{color:C.faint,fontSize:13}}>No pending registrations.</div>}
+          {pending.map(u=>(
+            <div key={u.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid "+C.border}}>
+              <div>
+                <div style={{fontWeight:600,fontSize:13}}>{u.name}</div>
+                <div style={{fontSize:11,color:C.muted}}>@{u.username} · {u.role} {u.class?"· "+u.class:""}</div>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <button style={{...S.btn(C.greenBg,C.green),fontSize:11,padding:"5px 12px",border:"1px solid "+C.green+"44"}} onClick={()=>approve(u.id)}>Approve</button>
+                <button style={{...S.btn(C.redBg,C.red),fontSize:11,padding:"5px 10px",border:"1px solid "+C.red+"44"}} onClick={()=>removeUser(u.id)}>Reject</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ANNOUNCE */}
+      {tab==="announce"&&<AnnouncementForm onPost={postAnnouncement}/>}
+
+      {/* RESULTS */}
+      {tab==="results"&&<ResultsView data={data} users={users} isAdmin/>}
+    </div>
+  );
+}
+
+function AnnouncementForm({onPost}){
+  const[text,setText]=useState("");
+  const[target,setTarget]=useState("all");
+  return(
+    <div style={S.card}>
+      <div style={{fontWeight:700,marginBottom:12}}>Post Announcement</div>
+      <div style={{marginBottom:10}}>
+        <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Message</div>
+        <textarea value={text} onChange={e=>setText(e.target.value)} rows={3} placeholder="Write your announcement…" style={{...S.inp,resize:"vertical"}}/>
+      </div>
+      <div style={{marginBottom:12}}>
+        <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Target</div>
+        <select value={target} onChange={e=>setTarget(e.target.value)}>
+          <option value="all">Everyone</option>
+          <option value="students">Students only</option>
+          <option value="teachers">Teachers only</option>
+        </select>
+      </div>
+      <button style={{...S.btn(),width:"100%"}} onClick={()=>{onPost(text,target);setText("");}}>📢 Post Announcement</button>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════
+   TEACHER DASHBOARD
+═══════════════════════════════════════════════ */
+function TeacherDash({user,data,setData,users,toast}){
+  const[tab,setTab]=useState("overview");
+  const myExams=(data.exams||[]).filter(e=>e.teacherId===user.id||e.teacherUsername===user.username);
+  const myResources=(data.resources||[]).filter(r=>r.teacherId===user.id||r.teacherUsername===user.username);
+  const allSubs=(data.submissions||[]);
+
+  const tabs=[["overview","📊 Overview"],["exams","📝 My Exams"],["create","➕ Create Exam"],["resources","📚 Resources"],["results","📈 Results"]];
+
+  return(
+    <div>
+      <div style={S.h1}>👩‍🏫 Teacher Panel</div>
+      <div style={S.sub}>Welcome, {user.name} · {user.subject||"Teacher"}</div>
+      <div style={{display:"flex",background:C.elevated,borderRadius:9,padding:3,marginBottom:16,gap:2,border:"1px solid "+C.border,flexWrap:"wrap"}}>
+        {tabs.map(([t,l])=><button key={t} style={S.tab(tab===t)} onClick={()=>setTab(t)}>{l}</button>)}
+      </div>
+
+      {tab==="overview"&&(
+        <div>
+          <div style={S.g3}>
+            {[{l:"My Exams",v:myExams.length,c:C.accent},{l:"Resources",v:myResources.length,c:C.green},{l:"Submissions",v:allSubs.filter(s=>myExams.find(e=>e.id===s.examId)).length,c:C.blue}].map(s=>(
+              <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c}}>{s.v}</div></div>
+            ))}
+          </div>
+          <AnnouncementsPanel data={data} role="teachers"/>
+        </div>
+      )}
+
+      {tab==="exams"&&<ExamList exams={myExams} data={data} setData={setData} toast={toast} isTeacher/>}
+      {tab==="create"&&<CreateExam user={user} data={data} setData={setData} toast={toast} onDone={()=>setTab("exams")}/>}
+      {tab==="resources"&&<ResourcesPanel user={user} data={data} setData={setData} toast={toast} isTeacher/>}
+      {tab==="results"&&<ResultsView data={data} users={users} myExams={myExams}/>}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════
+   CREATE EXAM
+═══════════════════════════════════════════════ */
+function CreateExam({user,data,setData,toast,onDone}){
+  const[step,setStep]=useState(1);
+  const[meta,setMeta]=useState({title:"",subject:user.subject||"",class:"",instructions:"",timeLimit:"",dueDate:""});
+  const[questions,setQuestions]=useState([]);
+  const[adding,setAdding]=useState(null); // current question being built
+
+  const QTYPES=[
+    {v:"mcq",l:"📋 Multiple Choice"},
+    {v:"fill",l:"✏️ Fill in Blank"},
+    {v:"match",l:"🔗 Matching"},
+    {v:"short",l:"📝 Short Answer"},
+  ];
+
+  function addQ(q){
+    setQuestions(prev=>[...prev,{...q,id:uid()}]);
+    setAdding(null);
+    toast("Question added ✓");
+  }
+
+  async function publish(){
+    if(!meta.title){toast("Add a title","err");return;}
+    if(questions.length===0){toast("Add at least 1 question","err");return;}
+    const exam={
+      id:uid(),
+      ...meta,
+      teacherId:user.id,
+      teacherUsername:user.username,
+      teacherName:user.name,
+      questions,
+      status:"published",
+      createdAt:now(),
+      totalMarks:questions.reduce((s,q)=>s+(parseInt(q.marks)||1),0),
+    };
+    const updated=[...(data.exams||[]),exam];
+    setData(d=>({...d,exams:updated}));
+    dsSet("exams",updated);
+    toast("Exam published ✓");
+    onDone();
+  }
+
+  return(
+    <div>
+      {/* Step indicator */}
+      <div style={{display:"flex",gap:4,marginBottom:16}}>
+        {[1,2,3].map(n=>(
+          <div key={n} style={{flex:1,height:4,borderRadius:4,background:step>=n?C.accent:C.border,transition:"background .3s"}}/>
+        ))}
+      </div>
+
+      {step===1&&(
+        <div style={S.card}>
+          <div style={{fontWeight:700,marginBottom:14}}>Step 1: Exam Details</div>
+          {[["Title","title","text"],["Subject","subject","text"],["Instructions","instructions","text"]].map(([l,k,t])=>(
+            <div key={k} style={{marginBottom:10}}>
+              <div style={{fontSize:11,color:C.muted,marginBottom:4}}>{l}</div>
+              {k==="instructions"
+                ?<textarea value={meta[k]} onChange={e=>setMeta({...meta,[k]:e.target.value})} rows={2} style={{...S.inp,resize:"vertical"}} placeholder={l}/>
+                :<input type={t} value={meta[k]} onChange={e=>setMeta({...meta,[k]:e.target.value})} placeholder={l}/>
+              }
+            </div>
+          ))}
+          <div style={S.g2}>
+            <div>
+              <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Class</div>
+              <select value={meta.class} onChange={e=>setMeta({...meta,class:e.target.value})}>
+                <option value="">All classes</option>
+                {["S1","S2","S3","S4","S5","S6"].map(c=><option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Time Limit (mins)</div>
+              <input type="number" value={meta.timeLimit} onChange={e=>setMeta({...meta,timeLimit:e.target.value})} placeholder="e.g. 60"/>
+            </div>
+          </div>
+          <div style={{marginBottom:12}}>
+            <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Due Date (optional)</div>
+            <input type="date" value={meta.dueDate} onChange={e=>setMeta({...meta,dueDate:e.target.value})}/>
+          </div>
+          <button style={{...S.btn(),width:"100%"}} onClick={()=>setStep(2)}>Next: Add Questions →</button>
+        </div>
+      )}
+
+      {step===2&&(
+        <div>
+          <div style={S.card}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+              <div style={{fontWeight:700}}>Step 2: Questions ({questions.length})</div>
+              <div style={{fontSize:12,color:C.muted}}>Total marks: {questions.reduce((s,q)=>s+(parseInt(q.marks)||1),0)}</div>
+            </div>
+            {questions.map((q,i)=>(
+              <div key={q.id} style={{padding:"8px 10px",borderRadius:8,background:C.elevated,marginBottom:8,border:"1px solid "+C.border}}>
+                <div style={{display:"flex",justifyContent:"space-between"}}>
+                  <span style={{fontWeight:600,fontSize:13}}>Q{i+1}. {q.text}</span>
+                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                    <span style={{...S.badge(C.accent,C.accentLight),fontSize:10}}>{q.marks} mk</span>
+                    <span style={{...S.badge(C.muted,"#f1f5f9"),fontSize:10}}>{q.type}</span>
+                    <button onClick={()=>setQuestions(prev=>prev.filter(x=>x.id!==q.id))}
+                      style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:14,padding:0}}>✕</button>
+                  </div>
+                </div>
+              </div>
+            ))}
+            {!adding&&(
+              <div style={{display:"flex",flexWrap:"wrap",gap:7,marginTop:8}}>
+                {QTYPES.map(qt=>(
+                  <button key={qt.v} style={{...S.btn(C.elevated,C.accent),border:"1px solid "+C.borderAccent,fontSize:12}} onClick={()=>setAdding(qt.v)}>{qt.l}</button>
+                ))}
+              </div>
+            )}
+            {adding&&<QuestionBuilder type={adding} onAdd={addQ} onCancel={()=>setAdding(null)}/>}
+          </div>
+          <div style={{display:"flex",gap:10}}>
+            <button style={{...S.btn(C.elevated,C.muted),flex:1,border:"1px solid "+C.border}} onClick={()=>setStep(1)}>← Back</button>
+            <button style={{...S.btn(),flex:2}} onClick={()=>setStep(3)}>Review & Publish →</button>
+          </div>
+        </div>
+      )}
+
+      {step===3&&(
+        <div style={S.card}>
+          <div style={{fontWeight:700,marginBottom:14}}>Step 3: Review & Publish</div>
+          <div style={{padding:"12px 14px",background:C.elevated,borderRadius:10,marginBottom:14,border:"1px solid "+C.border}}>
+            <div style={{fontSize:15,fontWeight:800,color:C.text,marginBottom:4}}>{meta.title}</div>
+            <div style={{fontSize:12,color:C.muted}}>{meta.subject} · {meta.class||"All classes"} · {questions.length} questions · {questions.reduce((s,q)=>s+(parseInt(q.marks)||1),0)} total marks</div>
+            {meta.timeLimit&&<div style={{fontSize:12,color:C.amber,marginTop:4}}>⏱ {meta.timeLimit} minutes</div>}
+          </div>
+          {questions.map((q,i)=>(
+            <div key={q.id} style={{padding:"8px 0",borderBottom:"1px solid "+C.border,fontSize:13}}>
+              <span style={{color:C.muted,marginRight:6}}>Q{i+1}.</span>
+              <span style={{fontWeight:600}}>{q.text}</span>
+              <span style={{color:C.accent,fontSize:11,marginLeft:8}}>[{q.marks} mark{q.marks>1?"s":""}]</span>
+            </div>
+          ))}
+          <div style={{display:"flex",gap:10,marginTop:14}}>
+            <button style={{...S.btn(C.elevated,C.muted),flex:1,border:"1px solid "+C.border}} onClick={()=>setStep(2)}>← Edit</button>
+            <button style={{...S.btn(C.green),flex:2}} onClick={publish}>🚀 Publish Exam</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Question Builder ─── */
+function QuestionBuilder({type,onAdd,onCancel}){
+  const[text,setText]=useState("");
+  const[marks,setMarks]=useState(1);
+  const[answer,setAnswer]=useState("");
+  const[options,setOptions]=useState(["","","",""]);
+  const[pairs,setPairs]=useState([{id:uid(),left:"",right:""},{id:uid(),left:"",right:""}]);
+
+  function submit(){
+    if(!text.trim()){return;}
+    const base={type,text:text.trim(),marks:parseInt(marks)||1};
+    if(type==="mcq") onAdd({...base,options:options.filter(Boolean),answer});
+    else if(type==="fill"||type==="short") onAdd({...base,answer});
+    else if(type==="match") onAdd({...base,pairs,answer:""});
+  }
+
+  return(
+    <div style={{marginTop:12,padding:"12px 14px",background:C.accentLight,borderRadius:10,border:"1px dashed "+C.borderAccent}}>
+      <div style={{fontWeight:700,fontSize:13,marginBottom:10,color:C.accent}}>
+        {type==="mcq"?"Multiple Choice":type==="fill"?"Fill in Blank":type==="match"?"Matching":"Short Answer"}
+      </div>
+      <div style={{marginBottom:8}}>
+        <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Question Text</div>
+        <textarea value={text} onChange={e=>setText(e.target.value)} rows={2} placeholder="Enter question…" style={{...S.inp,resize:"vertical"}}/>
+      </div>
+
+      {type==="mcq"&&(
+        <>
+          <div style={{marginBottom:8}}>
+            <div style={{fontSize:11,color:C.muted,marginBottom:6}}>Options (4)</div>
+            {options.map((o,i)=>(
+              <div key={i} style={{display:"flex",gap:6,marginBottom:5,alignItems:"center"}}>
+                <span style={{fontSize:11,color:C.muted,width:16}}>{String.fromCharCode(65+i)}.</span>
+                <input value={o} onChange={e=>{const n=[...options];n[i]=e.target.value;setOptions(n);}} placeholder={`Option ${String.fromCharCode(65+i)}`}/>
+              </div>
+            ))}
+          </div>
+          <div style={{marginBottom:8}}>
+            <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Correct Answer</div>
+            <select value={answer} onChange={e=>setAnswer(e.target.value)}>
+              <option value="">Select correct option…</option>
+              {options.filter(Boolean).map(o=><option key={o} value={o}>{o}</option>)}
+            </select>
+          </div>
+        </>
+      )}
+
+      {(type==="fill"||type==="short")&&(
+        <div style={{marginBottom:8}}>
+          <div style={{fontSize:11,color:C.muted,marginBottom:4}}>{type==="short"?"Keywords (comma-separated)":"Correct Answer"}</div>
+          <input value={answer} onChange={e=>setAnswer(e.target.value)} placeholder={type==="short"?"e.g. photosynthesis, chlorophyll":"Exact answer"}/>
+        </div>
+      )}
+
+      {type==="match"&&(
+        <div style={{marginBottom:8}}>
+          <div style={{fontSize:11,color:C.muted,marginBottom:6}}>Matching Pairs</div>
+          {pairs.map((p,i)=>(
+            <div key={p.id} style={{display:"flex",gap:6,marginBottom:5,alignItems:"center"}}>
+              <input value={p.left} onChange={e=>{const n=[...pairs];n[i]={...n[i],left:e.target.value};setPairs(n);}} placeholder="Left item" style={{flex:1}}/>
+              <span style={{color:C.muted,fontSize:13}}>↔</span>
+              <input value={p.right} onChange={e=>{const n=[...pairs];n[i]={...n[i],right:e.target.value};setPairs(n);}} placeholder="Right item" style={{flex:1}}/>
+            </div>
+          ))}
+          <button onClick={()=>setPairs(p=>[...p,{id:uid(),left:"",right:""}])}
+            style={{...S.btn(C.elevated,C.accent),fontSize:11,border:"1px solid "+C.borderAccent}}>+ Add Pair</button>
+        </div>
+      )}
+
+      <div style={{marginBottom:10}}>
+        <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Marks</div>
+        <input type="number" value={marks} onChange={e=>setMarks(e.target.value)} style={{width:80}}/>
+      </div>
+      <div style={{display:"flex",gap:8}}>
+        <button style={{...S.btn(),flex:2}} onClick={submit}>✓ Add Question</button>
+        <button style={{...S.btn(C.elevated,C.muted),flex:1,border:"1px solid "+C.border}} onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Exam List (Teacher) ─── */
+function ExamList({exams,data,setData,toast,isTeacher}){
+  async function deleteExam(id){
+    if(!confirm("Delete this exam?"))return;
+    const updated=(data.exams||[]).filter(e=>e.id!==id);
+    setData(d=>({...d,exams:updated}));
+    dsSet("exams",updated);
+    toast("Exam deleted");
+  }
+  if(exams.length===0)return<div style={{...S.card,textAlign:"center",color:C.faint,padding:40}}>No exams yet. Create your first exam!</div>;
+  return(
+    <div>
+      {exams.map(exam=>{
+        const subs=(data.submissions||[]).filter(s=>s.examId===exam.id);
+        const avg=subs.length>0?Math.round(subs.reduce((s,sub)=>s+(sub.pct||0),0)/subs.length):null;
+        return(
+          <div key={exam.id} style={S.card}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:800,fontSize:14,color:C.text}}>{exam.title}</div>
+                <div style={{fontSize:11,color:C.muted,marginTop:2}}>{exam.subject} · {exam.class||"All"} · {exam.questions?.length||0} Qs · {exam.totalMarks} marks</div>
+                {exam.dueDate&&<div style={{fontSize:11,color:C.amber,marginTop:2}}>Due: {exam.dueDate}</div>}
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{...S.badge(C.green,C.greenBg),marginBottom:4}}>{subs.length} submissions</div>
+                {avg!==null&&<div style={{fontSize:11,color:C.muted}}>Avg: {avg}%</div>}
+              </div>
+            </div>
+            {isTeacher&&(
+              <div style={{marginTop:10,paddingTop:8,borderTop:"1px solid "+C.border,display:"flex",gap:8}}>
+                <button style={{...S.btn(C.redBg,C.red),fontSize:11,padding:"4px 12px",border:"1px solid "+C.red+"33"}} onClick={()=>deleteExam(exam.id)}>Delete</button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════
+   STUDENT DASHBOARD
+═══════════════════════════════════════════════ */
+function StudentDash({user,data,setData,toast}){
+  const[tab,setTab]=useState("overview");
+  const[takingExam,setTakingExam]=useState(null);
+  const myClass=user.class||"";
+  const availableExams=(data.exams||[]).filter(e=>
+    e.status==="published"&&(!e.class||e.class===myClass||e.class==="")
+  );
+  const mySubmissions=(data.submissions||[]).filter(s=>s.studentId===user.id||s.studentUsername===user.username);
+  const submittedIds=new Set(mySubmissions.map(s=>s.examId));
+  const pending=availableExams.filter(e=>!submittedIds.has(e.id));
+
+  const tabs=[["overview","📊 Overview"],["exams","📝 My Exams"],["results","🏆 My Results"],["resources","📚 Resources"]];
+
+  if(takingExam) return<ExamInterface exam={takingExam} user={user} data={data} setData={setData} toast={toast} onDone={()=>{setTakingExam(null);setTab("results");}}/>;
+
+  return(
+    <div>
+      <div style={S.h1}>🎓 Student Portal</div>
+      <div style={S.sub}>Welcome, {user.name} · Class {user.class||"—"} · {user.regNo||""}</div>
+      <div style={{display:"flex",background:C.elevated,borderRadius:9,padding:3,marginBottom:16,gap:2,border:"1px solid "+C.border,flexWrap:"wrap"}}>
+        {tabs.map(([t,l])=><button key={t} style={S.tab(tab===t)} onClick={()=>setTab(t)}>{l}</button>)}
+      </div>
+
+      {tab==="overview"&&(
+        <div>
+          <div style={S.g3}>
+            {[{l:"Available",v:pending.length,c:C.amber},{l:"Completed",v:mySubmissions.length,c:C.green},{l:"Resources",v:(data.resources||[]).length,c:C.accent}].map(s=>(
+              <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c}}>{s.v}</div></div>
+            ))}
+          </div>
+          {pending.length>0&&(
+            <div style={{...S.card,border:"1.5px solid "+C.amber+"66",background:C.amberBg}}>
+              <div style={{fontWeight:700,color:C.amber,marginBottom:8}}>⏰ Pending Exams</div>
+              {pending.map(e=>(
+                <div key={e.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderBottom:"1px solid "+C.border}}>
+                  <div>
+                    <div style={{fontWeight:600,fontSize:13}}>{e.title}</div>
+                    <div style={{fontSize:11,color:C.muted}}>{e.subject} · {e.questions?.length} questions</div>
+                  </div>
+                  <button style={{...S.btn(),fontSize:12}} onClick={()=>setTakingExam(e)}>Start →</button>
+                </div>
+              ))}
+            </div>
+          )}
+          <AnnouncementsPanel data={data} role="students"/>
+          {mySubmissions.length>0&&(
+            <div style={S.card}>
+              <div style={{fontWeight:700,marginBottom:10}}>Recent Results</div>
+              {mySubmissions.slice(-3).reverse().map(s=>{
+                const exam=(data.exams||[]).find(e=>e.id===s.examId);
+                const gr=getGrade(s.pct||0);
+                return(
+                  <div key={s.id} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:"1px solid "+C.border}}>
+                    <div style={{fontSize:13,fontWeight:600}}>{exam?.title||"Exam"}</div>
+                    <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                      <span style={{fontSize:13,fontWeight:700,color:gr.c}}>{s.pct}%</span>
+                      <span style={{...S.badge(gr.c,gr.c+"22")}}>{gr.g}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab==="exams"&&(
+        <div>
+          {availableExams.length===0&&<div style={{...S.card,color:C.faint,textAlign:"center",padding:40}}>No exams available yet.</div>}
+          {availableExams.map(e=>{
+            const done=submittedIds.has(e.id);
+            const sub=mySubmissions.find(s=>s.examId===e.id);
+            const gr=done?getGrade(sub?.pct||0):null;
+            return(
+              <div key={e.id} style={{...S.card,opacity:done?.7:1}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                  <div>
+                    <div style={{fontWeight:800,fontSize:14}}>{e.title}</div>
+                    <div style={{fontSize:11,color:C.muted,marginTop:2}}>{e.subject} · {e.questions?.length} questions · {e.totalMarks} marks</div>
+                    {e.timeLimit&&<div style={{fontSize:11,color:C.amber,marginTop:2}}>⏱ {e.timeLimit} min</div>}
+                    {e.dueDate&&<div style={{fontSize:11,color:C.red,marginTop:2}}>Due: {e.dueDate}</div>}
+                  </div>
+                  {done
+                    ?<div style={{textAlign:"right"}}>
+                      <div style={{fontWeight:800,color:gr.c,fontSize:16}}>{sub.pct}%</div>
+                      <div style={{...S.badge(gr.c,gr.c+"22")}}>{gr.g} · {gr.l}</div>
+                    </div>
+                    :<button style={{...S.btn(),fontSize:12}} onClick={()=>setTakingExam(e)}>Start Exam →</button>
+                  }
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {tab==="results"&&<StudentResults submissions={mySubmissions} data={data}/>}
+      {tab==="resources"&&<ResourcesPanel data={data} isStudent/>}
+    </div>
+  );
+}
+
+/* ─── Exam Interface ─── */
+function ExamInterface({exam,user,data,setData,toast,onDone}){
+  const[answers,setAnswers]=useState({});
+  const[submitted,setSubmitted]=useState(false);
+  const[result,setResult]=useState(null);
+  const[timeLeft,setTimeLeft]=useState(exam.timeLimit?parseInt(exam.timeLimit)*60:null);
+  const[current,setCurrent]=useState(0);
+
+  useEffect(()=>{
+    if(!timeLeft||submitted)return;
+    const t=setInterval(()=>{
+      setTimeLeft(prev=>{
+        if(prev<=1){clearInterval(t);submit(true);return 0;}
+        return prev-1;
+      });
+    },1000);
+    return()=>clearInterval(t);
+  },[submitted]);
+
+  async function submit(auto=false){
+    if(submitted)return;
+    const res=calcScore(answers,exam.questions);
+    const sub={
+      id:uid(),examId:exam.id,
+      studentId:user.id,studentUsername:user.username,studentName:user.name,
+      studentClass:user.class||"",
+      answers,earned:res.earned,total:res.total,pct:res.pct,
+      submittedAt:now(),auto:!!auto,
+    };
+    const updated=[...(data.submissions||[]),sub];
+    setData(d=>({...d,submissions:updated}));
+    dsSet("submissions",updated);
+    setResult({...res,sub});
+    setSubmitted(true);
+    toast(auto?"Time up! Auto-submitted":"Exam submitted ✓");
+  }
+
+  const q=exam.questions[current];
+  const total=exam.questions.length;
+  const answered=Object.keys(answers).length;
+  const pct=Math.round((answered/total)*100);
+
+  if(submitted&&result){
+    const gr=getGrade(result.pct);
+    return(
+      <div className="fade-in">
+        <div style={{...S.card,textAlign:"center",padding:32,border:"2px solid "+gr.c+"44",background:gr.c+"0a"}}>
+          <div style={{fontSize:48,marginBottom:8}}>{result.pct>=50?"🎉":"😔"}</div>
+          <div style={{fontSize:32,fontWeight:900,color:gr.c}}>{result.pct}%</div>
+          <div style={{fontSize:20,fontWeight:700,color:C.text,marginBottom:4}}>{gr.g} — {gr.l}</div>
+          <div style={{color:C.muted,marginBottom:20}}>{result.earned} / {result.total} marks · {exam.questions.length} questions</div>
+          <div style={S.g3}>
+            {[{l:"Score",v:result.earned+"/"+result.total,c:gr.c},{l:"Percentage",v:result.pct+"%",c:gr.c},{l:"Grade",v:gr.g,c:gr.c}].map(s=>(
+              <div key={s.l} style={{...S.stat,textAlign:"center"}}>
+                <div style={S.sl}>{s.l}</div>
+                <div style={{...S.sv,color:s.c,fontSize:18}}>{s.v}</div>
+              </div>
+            ))}
+          </div>
+          <button style={{...S.btn(),padding:"11px 32px"}} onClick={onDone}>← Back to Dashboard</button>
+        </div>
+
+        {/* Review answers */}
+        <div style={S.card}>
+          <div style={{fontWeight:700,marginBottom:12}}>Answer Review</div>
+          {exam.questions.map((q,i)=>{
+            const a=answers[q.id];
+            const correct=q.type==="mcq"||q.type==="fill"
+              ?(a||"").trim().toLowerCase()===(q.answer||"").trim().toLowerCase()
+              :true;
+            return(
+              <div key={q.id} style={{padding:"8px 10px",borderRadius:8,marginBottom:6,
+                background:correct?C.greenBg:C.redBg,border:"1px solid "+(correct?C.green:C.red)+"33"}}>
+                <div style={{fontSize:13,fontWeight:600,marginBottom:4}}>Q{i+1}. {q.text}</div>
+                <div style={{fontSize:12}}>
+                  <span style={{color:C.muted}}>Your answer: </span>
+                  <span style={{fontWeight:600,color:correct?C.green:C.red}}>{typeof a==="object"?JSON.stringify(a):a||"—"}</span>
+                  {!correct&&<><span style={{color:C.muted}}> · Correct: </span><span style={{color:C.green,fontWeight:600}}>{q.answer}</span></>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  return(
+    <div className="fade-in">
+      {/* Header */}
+      <div style={{...S.card,marginBottom:12}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div>
+            <div style={{fontWeight:800,fontSize:15}}>{exam.title}</div>
+            <div style={{fontSize:11,color:C.muted}}>{exam.subject} · Question {current+1} of {total}</div>
+          </div>
+          {timeLeft!==null&&(
+            <div style={{textAlign:"center"}}>
+              <div style={{fontSize:20,fontWeight:800,color:timeLeft<60?C.red:timeLeft<300?C.amber:C.green}}>
+                {Math.floor(timeLeft/60)}:{String(timeLeft%60).padStart(2,"0")}
+              </div>
+              <div style={{fontSize:10,color:C.muted}}>REMAINING</div>
+            </div>
+          )}
+        </div>
+        {/* Progress */}
+        <div style={{marginTop:10}}>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:C.muted,marginBottom:3}}>
+            <span>{answered} answered</span><span>{pct}%</span>
+          </div>
+          <div style={{height:5,background:C.border,borderRadius:4}}>
+            <div style={{height:"100%",width:pct+"%",background:C.accent,borderRadius:4,transition:"width .3s"}}/>
+          </div>
+        </div>
+        {/* Q navigator */}
+        <div style={{display:"flex",flexWrap:"wrap",gap:4,marginTop:10}}>
+          {exam.questions.map((q,i)=>(
+            <button key={i} onClick={()=>setCurrent(i)}
+              style={{width:28,height:28,borderRadius:6,border:"1px solid "+(answers[q.id]?C.accent:C.border),
+                background:i===current?C.accent:answers[q.id]?C.accentLight:C.elevated,
+                color:i===current?"#fff":C.text,fontSize:11,fontWeight:700,cursor:"pointer"}}>
+              {i+1}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Question */}
+      {q&&<QuestionCard q={q} idx={current} answer={answers[q.id]} onChange={a=>setAnswers(prev=>({...prev,[q.id]:a}))}/>}
+
+      {/* Navigation */}
+      <div style={{display:"flex",gap:10,marginTop:12}}>
+        <button style={{...S.btn(C.elevated,C.muted),flex:1,border:"1px solid "+C.border}} disabled={current===0} onClick={()=>setCurrent(c=>c-1)}>← Prev</button>
+        {current<total-1
+          ?<button style={{...S.btn(),flex:2}} onClick={()=>setCurrent(c=>c+1)}>Next →</button>
+          :<button style={{...S.btn(C.green),flex:2}} onClick={()=>submit()}>Submit Exam ✓</button>
+        }
+      </div>
+      {exam.instructions&&<div style={{...S.card,marginTop:12,fontSize:12,color:C.muted,borderStyle:"dashed"}}>📋 {exam.instructions}</div>}
+    </div>
+  );
+}
+
+function QuestionCard({q,idx,answer,onChange}){
+  return(
+    <div style={S.card}>
+      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:4}}>
+        Q{idx+1}. {q.text}
+        <span style={{...S.badge(C.accent,C.accentLight),marginLeft:8}}>{q.marks} mark{q.marks>1?"s":""}</span>
+      </div>
+
+      {q.type==="mcq"&&(
+        <div style={{marginTop:10}}>
+          {(q.options||[]).map((opt,i)=>(
+            <label key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",borderRadius:8,
+              marginBottom:6,cursor:"pointer",
+              background:answer===opt?C.accentLight:C.elevated,
+              border:"1.5px solid "+(answer===opt?C.accent:C.border),
+              transition:"all .15s"}}>
+              <input type="radio" name={"q_"+q.id} checked={answer===opt} onChange={()=>onChange(opt)} style={{width:"auto",border:"none"}}/>
+              <span style={{fontSize:13,fontWeight:answer===opt?700:400}}>{String.fromCharCode(65+i)}. {opt}</span>
+            </label>
+          ))}
+        </div>
+      )}
+
+      {q.type==="fill"&&(
+        <input value={answer||""} onChange={e=>onChange(e.target.value)} placeholder="Type your answer here…" style={{marginTop:10}}/>
+      )}
+
+      {q.type==="short"&&(
+        <textarea value={answer||""} onChange={e=>onChange(e.target.value)} rows={3}
+          placeholder="Write your answer…" style={{...S.inp,marginTop:10,resize:"vertical"}}/>
+      )}
+
+      {q.type==="match"&&(
+        <div style={{marginTop:10}}>
+          {(q.pairs||[]).map((p,i)=>(
+            <div key={p.id} style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+              <div style={{flex:1,padding:"8px 12px",background:C.elevated,borderRadius:8,border:"1px solid "+C.border,fontSize:13,fontWeight:600}}>{p.left}</div>
+              <span style={{color:C.muted}}>→</span>
+              <input value={(answer&&answer[p.id])||""} onChange={e=>onChange({...(answer||{}),[p.id]:e.target.value})}
+                placeholder="Match here…" style={{flex:1}}/>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Student Results ─── */
+function StudentResults({submissions,data}){
+  if(submissions.length===0)return<div style={{...S.card,textAlign:"center",color:C.faint,padding:40}}>No results yet. Complete an exam to see your scores!</div>;
+  const avg=Math.round(submissions.reduce((s,sub)=>s+(sub.pct||0),0)/submissions.length);
+  const best=Math.max(...submissions.map(s=>s.pct||0));
+  return(
+    <div>
+      <div style={S.g3}>
+        {[{l:"Exams Done",v:submissions.length,c:C.accent},{l:"Average",v:avg+"%",c:getGrade(avg).c},{l:"Best Score",v:best+"%",c:C.green}].map(s=>(
+          <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c}}>{s.v}</div></div>
+        ))}
+      </div>
+      {submissions.slice().reverse().map(sub=>{
+        const exam=(data.exams||[]).find(e=>e.id===sub.examId);
+        const gr=getGrade(sub.pct||0);
+        return(
+          <div key={sub.id} style={S.card}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+              <div>
+                <div style={{fontWeight:700,fontSize:14}}>{exam?.title||"Exam"}</div>
+                <div style={{fontSize:11,color:C.muted}}>{exam?.subject||""} · {sub.submittedAt?.slice(0,10)}</div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontSize:22,fontWeight:900,color:gr.c}}>{sub.pct}%</div>
+                <div style={{...S.badge(gr.c,gr.c+"22")}}>{gr.g} — {gr.l}</div>
+              </div>
+            </div>
+            <div style={{marginTop:10}}>
+              <div style={{height:6,background:C.border,borderRadius:4}}>
+                <div style={{height:"100%",width:sub.pct+"%",background:gr.c,borderRadius:4}}/>
+              </div>
+              <div style={{fontSize:11,color:C.muted,marginTop:4}}>{sub.earned}/{sub.total} marks</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════
+   RESULTS VIEW (Teacher / Admin)
+═══════════════════════════════════════════════ */
+function ResultsView({data,users,myExams,isAdmin}){
+  const exams=myExams||(data.exams||[]);
+  const[selExam,setSelExam]=useState("");
+  const subs=(data.submissions||[]).filter(s=>selExam?s.examId===selExam:true);
+  const exam=exams.find(e=>e.id===selExam);
+
+  const classGroups={};
+  subs.forEach(s=>{
+    const cl=s.studentClass||"Unknown";
+    if(!classGroups[cl])classGroups[cl]=[];
+    classGroups[cl].push(s);
+  });
+
+  return(
+    <div>
+      <div style={S.card}>
+        <div style={{fontWeight:700,marginBottom:10}}>Filter by Exam</div>
+        <select value={selExam} onChange={e=>setSelExam(e.target.value)}>
+          <option value="">All exams</option>
+          {exams.map(e=><option key={e.id} value={e.id}>{e.title}</option>)}
+        </select>
+      </div>
+
+      {subs.length===0&&<div style={{...S.card,color:C.faint,textAlign:"center",padding:32}}>No submissions {selExam?"for this exam":"yet"}.</div>}
+
+      {subs.length>0&&(
+        <>
+          <div style={S.g3}>
+            {[
+              {l:"Submissions",v:subs.length,c:C.accent},
+              {l:"Average Score",v:Math.round(subs.reduce((s,x)=>s+(x.pct||0),0)/subs.length)+"%",c:C.blue},
+              {l:"Pass Rate",v:Math.round((subs.filter(s=>s.pct>=50).length/subs.length)*100)+"%",c:C.green},
+            ].map(s=>(
+              <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c}}>{s.v}</div></div>
+            ))}
+          </div>
+
+          <div style={S.card}>
+            <div style={{fontWeight:700,marginBottom:10}}>
+              {exam?exam.title+" — Results":"All Results"}
+            </div>
+            <div style={{overflowX:"auto"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                <thead>
+                  <tr style={{background:C.elevated}}>
+                    {["Student","Class","Score","Grade","Date"].map(h=>(
+                      <th key={h} style={{padding:"8px 10px",textAlign:"left",color:C.muted,fontWeight:700,borderBottom:"1px solid "+C.border,fontSize:11,textTransform:"uppercase",letterSpacing:".5px"}}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {subs.slice().sort((a,b)=>(b.pct||0)-(a.pct||0)).map((s,i)=>{
+                    const gr=getGrade(s.pct||0);
+                    return(
+                      <tr key={s.id} style={{background:i%2===0?"transparent":C.elevated}}>
+                        <td style={{padding:"8px 10px",fontWeight:600,color:C.text}}>{s.studentName}</td>
+                        <td style={{padding:"8px 10px",color:C.muted}}>{s.studentClass||"—"}</td>
+                        <td style={{padding:"8px 10px"}}>
+                          <div style={{display:"flex",alignItems:"center",gap:8}}>
+                            <span style={{fontWeight:700,color:gr.c}}>{s.pct}%</span>
+                            <div style={{flex:1,height:5,background:C.border,borderRadius:4,minWidth:60}}>
+                              <div style={{height:"100%",width:s.pct+"%",background:gr.c,borderRadius:4}}/>
+                            </div>
+                          </div>
+                        </td>
+                        <td style={{padding:"8px 10px"}}><span style={{...S.badge(gr.c,gr.c+"22")}}>{gr.g}</span></td>
+                        <td style={{padding:"8px 10px",color:C.muted}}>{s.submittedAt?.slice(0,10)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Deliberation */}
+      {isAdmin&&subs.length>0&&(
+        <DeliberationPanel subs={subs} users={users} exam={exam}/>
+      )}
+    </div>
+  );
+}
+
+/* ─── Deliberation ─── */
+function DeliberationPanel({subs,users,exam}){
+  const sorted=subs.slice().sort((a,b)=>(b.pct||0)-(a.pct||0));
+  const pass=sorted.filter(s=>s.pct>=50);
+  const fail=sorted.filter(s=>s.pct<50);
+  return(
+    <div style={S.card}>
+      <div style={{fontWeight:700,marginBottom:4}}>⚖️ Deliberation</div>
+      <div style={{fontSize:12,color:C.muted,marginBottom:14}}>Pass/fail decisions · Rankings · Weak learners</div>
+      <div style={S.g3}>
+        {[{l:"Passed",v:pass.length,c:C.green},{l:"Failed",v:fail.length,c:C.red},{l:"Pass Rate",v:subs.length>0?Math.round((pass.length/subs.length)*100)+"%":"0%",c:C.blue}].map(s=>(
+          <div key={s.l} style={S.stat}><div style={S.sl}>{s.l}</div><div style={{...S.sv,color:s.c}}>{s.v}</div></div>
+        ))}
+      </div>
+      {fail.length>0&&(
+        <div style={{padding:"10px 14px",background:C.redBg,borderRadius:9,border:"1px solid "+C.red+"33",marginTop:8}}>
+          <div style={{fontWeight:700,color:C.red,marginBottom:6,fontSize:13}}>⚠️ Students Needing Support</div>
+          {fail.map(s=>(
+            <div key={s.id} style={{display:"flex",justifyContent:"space-between",fontSize:12,padding:"4px 0",borderBottom:"1px solid "+C.red+"22"}}>
+              <span style={{fontWeight:600}}>{s.studentName}</span>
+              <span style={{color:C.red,fontWeight:700}}>{s.pct}% — FAIL</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{marginTop:10}}>
+        <div style={{fontWeight:700,fontSize:12,marginBottom:6}}>🏆 Class Ranking</div>
+        {sorted.slice(0,10).map((s,i)=>{
+          const gr=getGrade(s.pct||0);
+          return(
+            <div key={s.id} style={{display:"flex",alignItems:"center",gap:10,padding:"6px 0",borderBottom:"1px solid "+C.border,fontSize:12}}>
+              <span style={{width:20,fontWeight:700,color:i<3?C.amber:C.muted}}>#{i+1}</span>
+              <span style={{flex:1,fontWeight:600}}>{s.studentName}</span>
+              <span style={{fontWeight:700,color:gr.c}}>{s.pct}%</span>
+              <span style={{...S.badge(gr.c,gr.c+"22")}}>{gr.g}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════
+   RESOURCES PANEL
+═══════════════════════════════════════════════ */
+function ResourcesPanel({user,data,setData,toast,isTeacher,isStudent}){
+  const[form,setForm]=useState({title:"",subject:"",type:"Notes",url:"",description:""});
+  const[adding,setAdding]=useState(false);
+  const resources=data.resources||[];
+
+  async function addResource(){
+    if(!form.title||!form.url){toast("Fill title and URL","err");return;}
+    const res={id:uid(),...form,teacherId:user?.id,teacherUsername:user?.username,teacherName:user?.name,createdAt:now()};
+    const updated=[...resources,res];
+    setData(d=>({...d,resources:updated}));
+    dsSet("resources",updated);
+    toast("Resource added ✓");
+    setForm({title:"",subject:"",type:"Notes",url:"",description:""});
+    setAdding(false);
+  }
+
+  async function removeResource(id){
+    const updated=resources.filter(r=>r.id!==id);
+    setData(d=>({...d,resources:updated}));
+    dsSet("resources",updated);
+    toast("Resource removed");
+  }
+
+  return(
+    <div>
+      {isTeacher&&(
+        <>
+          {!adding&&<button style={{...S.btn(),width:"100%",marginBottom:12}} onClick={()=>setAdding(true)}>+ Upload Resource</button>}
+          {adding&&(
+            <div style={S.card}>
+              <div style={{fontWeight:700,marginBottom:12}}>Add Learning Resource</div>
+              {[["Title","title","text"],["Subject","subject","text"],["URL / Link","url","url"]].map(([l,k,t])=>(
+                <div key={k} style={{marginBottom:10}}>
+                  <div style={{fontSize:11,color:C.muted,marginBottom:4}}>{l}</div>
+                  <input type={t} value={form[k]} onChange={e=>setForm({...form,[k]:e.target.value})} placeholder={l}/>
+                </div>
+              ))}
+              <div style={{marginBottom:10}}>
+                <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Type</div>
+                <select value={form.type} onChange={e=>setForm({...form,type:e.target.value})}>
+                  {["Notes","PDF","Video","Slide","Exercise","Other"].map(t=><option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div style={{marginBottom:12}}>
+                <div style={{fontSize:11,color:C.muted,marginBottom:4}}>Description (optional)</div>
+                <textarea value={form.description} onChange={e=>setForm({...form,description:e.target.value})} rows={2} style={{...S.inp,resize:"vertical"}} placeholder="Brief description…"/>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <button style={{...S.btn(),flex:2}} onClick={addResource}>Save Resource</button>
+                <button style={{...S.btn(C.elevated,C.muted),flex:1,border:"1px solid "+C.border}} onClick={()=>setAdding(false)}>Cancel</button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {resources.length===0&&<div style={{...S.card,color:C.faint,textAlign:"center",padding:40}}>No resources yet.</div>}
+      {resources.map(r=>(
+        <div key={r.id} style={S.card}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:700,fontSize:13}}>{r.title}</div>
+              <div style={{fontSize:11,color:C.muted,marginTop:2}}>{r.subject} · {r.teacherName||"Teacher"}</div>
+              {r.description&&<div style={{fontSize:12,color:C.muted,marginTop:4}}>{r.description}</div>}
+            </div>
+            <span style={{...S.badge(C.accent,C.accentLight),marginLeft:8}}>{r.type}</span>
+          </div>
+          <div style={{marginTop:10,display:"flex",gap:8}}>
+            <a href={r.url} target="_blank" rel="noreferrer"
+              style={{...S.btn(C.blueBg,C.blue),textDecoration:"none",fontSize:12,padding:"5px 14px",border:"1px solid "+C.blue+"33"}}>
+              📥 Open
+            </a>
+            {isTeacher&&<button style={{...S.btn(C.redBg,C.red),fontSize:11,padding:"5px 10px",border:"1px solid "+C.red+"33"}} onClick={()=>removeResource(r.id)}>Remove</button>}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ─── Announcements Panel ─── */
+function AnnouncementsPanel({data,role}){
+  const anns=(data.announcements||[]).filter(a=>a.target==="all"||a.target===role).slice(-5).reverse();
+  if(anns.length===0)return null;
+  return(
+    <div style={{...S.card,border:"1.5px solid "+C.accent+"44",background:C.accentLight}}>
+      <div style={{fontWeight:700,color:C.accent,marginBottom:8}}>📢 Announcements</div>
+      {anns.map(a=>(
+        <div key={a.id} style={{padding:"7px 0",borderBottom:"1px solid "+C.borderAccent,fontSize:13}}>
+          <div style={{color:C.text}}>{a.text}</div>
+          <div style={{fontSize:10,color:C.muted,marginTop:2}}>{a.author} · {a.date}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════
+   MAIN APP
+═══════════════════════════════════════════════ */
+function App(){
+  const[user,setUser]=useState(null);
+  const[users,setUsers]=useState(INIT_USERS);
+  const[data,setData]=useState(INIT_DATA);
+  const[loading,setLoading]=useState(true);
+  const[page,setPage]=useState("dash");
+  const[showToast,toastEl]=useToast();
+
+  // Load data from JSONBin on mount
+  useEffect(()=>{
+    (async()=>{
+      try{
+        const [u,d]=await Promise.all([getOnlineUsers(),getOnlineData()]);
+        if(u&&u.length>0) setUsers(u);
+        if(d){
+          setData({
+            students:d.students||INIT_DATA.students,
+            teachers:d.teachers||INIT_DATA.teachers,
+            resources:d.resources||[],
+            exams:d.exams||[],
+            submissions:d.submissions||[],
+            announcements:d.announcements||[],
+          });
+          _latestData=d;
+        }
+      }catch(e){console.error("Load error",e);}
+      setLoading(false);
+    })();
+  },[]);
+
+  function doLogout(){setUser(null);setPage("dash");}
+
+  if(loading)return(
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:16}}>
+      <div style={{fontSize:42}}>🎓</div>
+      <div style={{fontSize:22,fontWeight:900,color:C.accent}}>EduIQ</div>
+      <Spinner/>
+      <div style={{color:C.muted,fontSize:13}}>Loading school data…</div>
+    </div>
+  );
+
+  if(!user) return<LoginPage onLogin={setUser} users={users}/>;
+
+  const isMobile=window.innerWidth<600;
+
+  return(
+    <div style={{minHeight:"100vh"}}>
+      {toastEl}
+      {/* Top Bar */}
+      <div style={{background:"#fff",borderBottom:"1px solid "+C.border,position:"sticky",top:0,zIndex:100,
+        boxShadow:"0 1px 8px rgba(99,102,241,.07)"}}>
+        <div style={{maxWidth:700,margin:"0 auto",padding:"0 14px",height:52,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:22}}>🎓</span>
+            <span style={{fontWeight:900,fontSize:17,color:C.accent,letterSpacing:-0.5}}>EduIQ</span>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{fontSize:11,color:C.muted,textAlign:"right"}}>
+              <div style={{fontWeight:700,color:C.text}}>{user.name}</div>
+              <div style={{textTransform:"capitalize"}}>{user.role}</div>
+            </div>
+            <button onClick={doLogout} style={{...S.btn(C.redBg,C.red),fontSize:11,padding:"5px 12px",border:"1px solid "+C.red+"44"}}>
+              Sign Out
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div style={{maxWidth:700,margin:"0 auto",padding:"16px 14px 40px"}}>
+        <div className="fade-in">
+          {user.role==="admin"&&<AdminDash user={user} data={data} setData={setData} users={users} setUsers={setUsers} toast={showToast} onLogout={doLogout}/>}
+          {user.role==="teacher"&&<TeacherDash user={user} data={data} setData={setData} users={users} toast={showToast}/>}
+          {user.role==="student"&&<StudentDash user={user} data={data} setData={setData} toast={showToast}/>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
